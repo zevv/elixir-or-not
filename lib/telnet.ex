@@ -57,7 +57,7 @@ defmodule Db.Snode do
   def init() do
     group("")
     |> group("system")
-    |> group("info" |> group("device"))
+    |> add(group("info") |> group("device"))
   end
 end
 
@@ -163,55 +163,62 @@ defmodule Telnet.Handler do
     session.transport.send(session.socket, data)
   end
   
-  defp handle_do(session) do
-    case srecv(session) do
-      @opt_echo ->
-        %{session | :echo => :true}
-        session
-      @opt_suppress_go_ahead -> 
-        Logger.debug("> do suppress_go_ahead")
-        session
-    end
+  defp handle_iac(@cmd_do, session) do
+    handle_iac_do(srecv(session), session)
+  end
+  
+  defp handle_iac(@cmd_will, session) do
+    handle_iac_will(srecv(session), session)
+  end
+  
+  defp handle_iac(@cmd_sb, session) do
+    handle_iac_sb(srecv(session), session)
+  end
+  
+  defp handle_iac(@cmd_se, session) do
+    session
+  end
+  
+  defp handle_iac_do(@opt_echo, session) do
+    %{session | :echo => :true}
   end
 
-  defp handle_will(session) do
-    case srecv(session) do
-      @opt_window_size ->
-        Logger.debug("> will window_size")
-        session
-    end
+  defp handle_iac_do(@opt_suppress_go_ahead, session) do
+    Logger.debug("> do suppress_go_ahead")
+    session
   end
 
-  defp handle_sb(session) do
-    case srecv(session) do
-      @opt_window_size -> 
-        << width :: big-size(16), height :: big-size(16) >> = srecv(session, 4)
-        Logger.debug "> window_size width: #{width}, height: #{height}"
-        %{session | :width => width, :height => height}
-    end
+  defp handle_iac_will(@opt_window_size, session) do
+    Logger.debug("> will window_size")
+    session
   end
 
-  defp handle(session) do
-    case srecv(session) do
-      @cmd_iac ->
-        case srecv(session) do
-          @cmd_do -> handle_do(session)
-          @cmd_will -> handle_will(session)
-          @cmd_sb -> handle_sb(session)
-          @cmd_se -> session
-        end
-      { :error, :timeout } -> session
-      { :error, msg } ->
-        Logger.warn("> " <> Atom.to_string(msg))
-        %{session | :stop => :true}
-      c ->
-        IO.inspect(c)
-        session = %{session | :editor => Telnet.Editor.handle_char(session.editor, c)}
-        ssend(session, "\e[G")
-        ssend(session, session.editor.line)
-        ssend(session, "\e[K")
-        session
-    end
+  defp handle_iac_sb(@opt_window_size, session) do
+    << width :: big-size(16), height :: big-size(16) >> = srecv(session, 4)
+    Logger.debug "> window_size width: #{width}, height: #{height}"
+    %{session | :width => width, :height => height}
+  end
+  
+  defp handle(@cmd_iac, session) do
+    handle_iac(srecv(session), session)
+  end
+  
+  defp handle({ :error, :timeout }, session) do
+    session
+  end
+
+  defp handle({ :error, msg }, session) do
+    Logger.warn("> " <> Atom.to_string(msg))
+    %{session | :stop => :true}
+  end
+
+  defp handle(c, session) do
+    IO.inspect(c)
+    session = %{session | :editor => Telnet.Editor.handle_char(session.editor, c)}
+    ssend(session, "\e[G")
+    ssend(session, session.editor.line)
+    ssend(session, "\e[K")
+    session
   end
 
   ## API
@@ -236,7 +243,7 @@ defmodule Telnet.Handler do
   end
 
   def loop(session) do
-    session = handle(session)
+    session = handle(srecv(session), session)
     if not session.stop do
       loop(session)
     end
